@@ -3,10 +3,7 @@ from PIL import Image
 import streamlit as st
 import torch
 import torch.nn.functional as F
-from torchvision import transforms
-
-# Import your model loader from model_file.py
-from model_file import load_model
+from torchvision import transforms, models
 
 # -------------------- PAGE CONFIG --------------------
 st.set_page_config(
@@ -15,7 +12,34 @@ st.set_page_config(
     layout="wide",
 )
 
-# -------------------- CUSTOM CSS --------------------
+# -------------------- LOAD MODEL (from your old app) --------------------
+@st.cache_resource
+def get_model():
+    # This is exactly the same logic you used before
+    weights_enum = None
+    try:
+        weights_enum = models.EfficientNet_B2_Weights.IMAGENET1K_V1
+    except Exception:
+        weights_enum = None
+
+    # build same architecture
+    model = models.efficientnet_b2(weights=weights_enum)
+
+    # replace classifier head to match training
+    in_features = model.classifier[1].in_features
+    model.classifier[1] = torch.nn.Linear(in_features, 2)
+
+    # load trained weights
+    state_dict = torch.load("best_model.pth", map_location=torch.device("cpu"))
+    model.load_state_dict(state_dict)
+
+    model.eval()
+    return model
+
+
+model = get_model()
+
+# -------------------- CUSTOM CSS (styling) --------------------
 APP_CSS = """
 <style>
 .main {
@@ -26,14 +50,14 @@ APP_CSS = """
     padding-bottom: 4rem;
 }
 .glowguard-hero {
-    font-size: 2.7rem;
+    font-size: 2.4rem;
     font-weight: 800;
     background: linear-gradient(90deg, #ff7aa2, #ffd36b);
     -webkit-background-clip: text;
     color: transparent;
 }
 .glowguard-sub {
-    font-size: 1.05rem;
+    font-size: 1.0rem;
     color: #cfcfd9;
 }
 .glowguard-card {
@@ -42,11 +66,11 @@ APP_CSS = """
     background: #14141f;
     border: 1px solid #25253a;
     box-shadow: 0 16px 40px rgba(0,0,0,0.45);
-    margin-bottom: 1rem;
+    margin-top: 1rem;
 }
 .glowguard-card-title {
     font-weight: 700;
-    font-size: 1.15rem;
+    font-size: 1.1rem;
     margin-bottom: 0.3rem;
     color: #ffffff;
 }
@@ -54,176 +78,158 @@ APP_CSS = """
     font-size: 0.9rem;
     color: #b3b3c2;
 }
-.glowguard-pill {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    background: rgba(255,255,255,0.06);
-    color: #e5e5ff;
-    margin-right: 6px;
-}
-.glowguard-section-title {
-    font-size: 1.3rem;
-    font-weight: 700;
-    margin-top: 1.0rem;
-    margin-bottom: 0.4rem;
-    color: #f9f9ff;
-}
 </style>
 """
 st.markdown(APP_CSS, unsafe_allow_html=True)
 
-# -------------------- SIDEBAR NAVIGATION --------------------
-st.sidebar.title("GlowGuard")
-st.sidebar.caption("AI skin lesion assistant")
-
-page = st.sidebar.radio(
-    "Navigate",
-    ["Home feed", "Scan lesion", "Explore cases", "About & safety"],
-    index=0,
-)
-
-# -------------------- LOAD MODEL --------------------
-@st.cache_resource
-def get_model():
-    print("GlowGuard: loading model...", file=sys.stderr)
-    model = load_model()
-    print("GlowGuard: model ready.", file=sys.stderr)
-    return model
-
-model = get_model()
-
-# -------------------- HOME FEED --------------------
-def show_home_page():
+# -------------------- MAIN UI --------------------
+def main():
     col_left, col_right = st.columns([2, 1], gap="large")
 
     with col_left:
         st.markdown('<div class="glowguard-hero">GlowGuard</div>', unsafe_allow_html=True)
         st.markdown(
             '<div class="glowguard-sub">'
-            'A health-focused feed for exploring skin lesions with AI. '
-            'Upload images, browse examples, and learn when to see a doctor. '
-            '<b>Not a diagnosis.</b>'
+            'Upload a skin lesion photo and GlowGuard will estimate the probability that it is malignant. '
+            '<b>This is not medical advice.</b>'
             '</div>',
             unsafe_allow_html=True,
         )
 
-        st.markdown("")
-        st.markdown('<div class="glowguard-section-title">Quick actions</div>', unsafe_allow_html=True)
+        st.markdown("---")
+        uploaded_file = st.file_uploader("Upload an image (JPG/PNG)", type=["jpg", "jpeg", "png"])
 
-        c1, c2 = st.columns(2)
-
-        with c1:
-            st.markdown('<div class="glowguard-card">', unsafe_allow_html=True)
-            st.markdown('<div class="glowguard-card-title">📸 Start a Scan</div>', unsafe_allow_html=True)
-            st.markdown('<div class="glowguard-small">Upload a lesion image and get an AI risk score.</div>', unsafe_allow_html=True)
-            if st.button("Go to Scan ➜", key="go_scan_home"):
-                st.session_state["page_override"] = "Scan lesion"
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with c2:
-            st.markdown('<div class="glowguard-card">', unsafe_allow_html=True)
-            st.markdown('<div class="glowguard-card-title">🎞 Explore Cases</div>', unsafe_allow_html=True)
-            st.markdown('<div class="glowguard-small">View example benign & suspicious lesions (demo only).</div>', unsafe_allow_html=True)
-            if st.button("Explore ➜", key="go_explore_home"):
-                st.session_state["page_override"] = "Explore cases"
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_right:
-        st.markdown('<div class="glowguard-section-title">About GlowGuard</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="glowguard-card glowguard-small">'
-            'GlowGuard uses a deep learning model to estimate melanoma risk. '
-            'This is an educational tool only.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-# -------------------- SCAN PAGE --------------------
-def show_scan_page():
-    st.markdown('<div class="glowguard-section-title">Scan a Skin Lesion</div>', unsafe_allow_html=True)
-    st.write("Upload a close-up photo to receive an AI-generated risk estimate.")
-
-    uploaded_file = st.file_uploader("Upload an image (JPG/PNG)", type=["jpg", "jpeg", "png"])
-
-    if uploaded_file:
-        image = Image.open(uploaded_file).convert("RGB")
-
-        cimg, cinfo = st.columns([2, 1], gap="large")
-
-        with cimg:
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file).convert("RGB")
             st.image(image, caption="Uploaded image", use_column_width=True)
 
-        with cinfo:
-            st.markdown('<div class="glowguard-card glowguard-small">Keep the lesion centered, sharp, and well-lit.</div>', unsafe_allow_html=True)
+            if st.button("Run GlowGuard Scan"):
+                with st.spinner("Running model prediction..."):
 
-        if st.button("Run GlowGuard Scan"):
-            with st.spinner("Running model prediction..."):
+                    # -------- REAL MODEL PREDICTION CODE --------
 
-            
-# 🚨🚨 REAL MODEL PREDICTION CODE (from app.copy.py)
-# -------------------------------------------------------
+                    # Preprocessing transform
+                    tf = transforms.Compose([
+                        transforms.Resize((224, 224)),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            [0.485, 0.456, 0.406],
+                            [0.229, 0.224, 0.225],
+                        ),
+                    ])
 
-# Preprocessing transform
-tf = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        [0.485, 0.456, 0.406],
-        [0.229, 0.224, 0.225]
-    )
-])
+                    # Apply transforms
+                    x = tf(image).unsqueeze(0)
 
-# Apply transforms
-x = tf(image).unsqueeze(0)
+                    # Model inference
+                    with torch.no_grad():
+                        logits = model(x)
+                        probs = F.softmax(logits, dim=1)[0]
 
-# Model inference
-with torch.no_grad():
-    logits = model(x)
-    probs = F.softmax(logits, dim=1)[0]
+                    # Malignant probability (class index 1)
+                    prob = float(probs[1])  # 0–1
 
-# Malignant class = index 1
-prob = float(probs[1])   # <-- MUST RETURN VALUE BETWEEN 0 AND 1
+                st.success("Scan complete ✅")
 
-# -------------------------------------------------------
+                # --- Interpret prediction as Malignant / Benign + percentages ---
+                risk_pct = prob * 100.0
+                benign_pct = 100.0 - risk_pct
 
-            st.success("Scan complete!")
+                # Simple rule: if malignant probability >= 50%, predict malignant
+                label = "Malignant" if risk_pct >= 50.0 else "Benign"
 
-            st.markdown('<div class="glowguard-section-title">Result</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="glowguard-card glowguard-card-title">Estimated malignancy risk: {prob*100:.1f}%</div>', unsafe_allow_html=True)
+                # Main prediction card
+                st.markdown('<div class="glowguard-card">', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="glowguard-card-title">Prediction: {label}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    (
+                        f'<div class="glowguard-small">'
+                        f'Estimated chance this lesion is <b>malignant</b>: {risk_pct:.1f}%<br>'
+                        f'Estimated chance this lesion is <b>benign</b>: {benign_pct:.1f}%'
+                        '</div>'
+                    ),
+                    unsafe_allow_html=True,
+                )
 
-# -------------------- EXPLORE PAGE --------------------
-def show_explore_page():
-    st.markdown('<div class="glowguard-section-title">Explore Example Cases</div>', unsafe_allow_html=True)
-    st.write("These are demo text-only examples to help you learn patterns.")
+                # Risk guidance text based on malignant probability
+                if risk_pct >= 70:
+                    st.markdown(
+                        '<div class="glowguard-small">⚠️ This looks like a <b>high-risk</b> lesion based on the model. '
+                        'Please see a dermatologist as soon as possible. Only a doctor can diagnose skin cancer.</div>',
+                        unsafe_allow_html=True,
+                    )
+                elif risk_pct >= 40:
+                    st.markdown(
+                        '<div class="glowguard-small">⚠️ This falls into an <b>intermediate-risk</b> range. '
+                        'Consider scheduling an appointment with a dermatologist to have it checked.</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div class="glowguard-small">'
+                        'This looks more likely to be <b>benign</b> according to the model, '
+                        'but AI can be wrong. If the spot is new, changing, or worrying you, '
+                        'still consult a professional.</div>',
+                        unsafe_allow_html=True,
+                    )
 
-    st.markdown('<div class="glowguard-card"><span class="glowguard-pill">Benign</span><div class="glowguard-card-title">Smooth bordered mole</div><div class="glowguard-small">Single color, round, stable over years.</div></div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="glowguard-card"><span class="glowguard-pill">Suspicious</span><div class="glowguard-card-title">Irregular, fast-changing lesion</div><div class="glowguard-small">Multiple colors, asymmetry, jagged edges.</div></div>', unsafe_allow_html=True)
+                # Definitions card: malignant vs benign
+                st.markdown('<div class="glowguard-card">', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="glowguard-card-title">What do "malignant" and "benign" mean?</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    (
+                        '<div class="glowguard-small">'
+                        '<b>Benign</b> skin lesions are <b>non-cancerous</b> growths. They do not invade surrounding '
+                        'tissues or spread (metastasize) to other parts of the body. Examples include common moles, '
+                        'seborrheic keratoses, and many harmless spots that people develop over time.<br><br>'
+                        '<b>Malignant</b> skin lesions are <b>cancers</b>, such as melanoma or other skin cancers. '
+                        'They can grow into deeper layers of the skin and may spread to lymph nodes or other organs. '
+                        'Early detection and treatment are very important.<br><br>'
+                        'GlowGuard can only estimate probabilities from a photo. It cannot see beneath the skin, '
+                        'take a biopsy, or replace an in-person exam. Always talk to a healthcare professional if you '
+                        'notice a new, changing, or worrying lesion.'
+                        '</div>'
+                    ),
+                    unsafe_allow_html=True,
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
 
-# -------------------- ABOUT PAGE --------------------
-def show_about_page():
-    st.markdown('<div class="glowguard-section-title">About & Safety</div>', unsafe_allow_html=True)
-    st.write("""
-GlowGuard uses a deep learning model (EfficientNet-B2) to estimate melanoma risk.
-This is **not medical advice**.
-Always consult a dermatologist for concerning lesions.
-""")
+        else:
+            st.info("⬆️ Upload a clear close-up lesion photo to get started.")
 
-# -------------------- ROUTER --------------------
-def route(page_name):
-    if page_name == "Home feed":
-        show_home_page()
-    elif page_name == "Scan lesion":
-        show_scan_page()
-    elif page_name == "Explore cases":
-        show_explore_page()
-    elif page_name == "About & safety":
-        show_about_page()
+    with col_right:
+        st.markdown('<div class="glowguard-card">', unsafe_allow_html=True)
+        st.markdown('<div class="glowguard-card-title">How to take a good photo</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="glowguard-small">'
+            '• Center the lesion in the frame<br>'
+            '• Make sure it is in focus<br>'
+            '• Use good lighting (no heavy flash glare)<br>'
+            '• Avoid multiple lesions in one image'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
 
-if "page_override" in st.session_state:
-    target = st.session_state.pop("page_override")
-    route(target)
-else:
-    route(page)
+        st.markdown('<div class="glowguard-card">', unsafe_allow_html=True)
+        st.markdown('<div class="glowguard-card-title">Safety note</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="glowguard-small">'
+            'GlowGuard is an educational project, not a medical device. '
+            'Do not use it to make medical decisions. Always consult a doctor for any concerns.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
